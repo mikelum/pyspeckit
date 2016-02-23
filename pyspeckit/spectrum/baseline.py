@@ -8,8 +8,6 @@ import history
 from .. import specwarnings
 from astropy import log
 
-import scipy.interpolate as interp
-
 interactive_help_message = """
 (1) Left-click or press 1 (one) at two positions to select or add to the baseline fitting range - it will be
 highlighted in green if the selection is successful.
