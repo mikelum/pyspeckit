@@ -1,12 +1,14 @@
+from __future__ import print_function
 import numpy as np
 import matplotlib
-from ..config import mycfg
 from ..config import ConfigDescriptor as cfgdec
-import interactive
-import copy
-import history
 from .. import specwarnings
+from .. import mpfit
+from . import interactive
+from . import history
+from . import models
 from astropy import log
+import copy
 
 interactive_help_message = """
 (1) Left-click or press 1 (one) at two positions to select or add to the baseline fitting range - it will be
@@ -182,8 +184,10 @@ class Baseline(interactive.Interactive):
                                LoudDebug=LoudDebug,
                                prefit_continuum=prefit_continuum,
                                **kwargs)
-            if highlight_fitregion: self.highlight_fitregion()
-        if save: self.savefit()
+            if highlight_fitregion:
+                self.highlight_fitregion()
+        if save:
+            self.savefit()
 
     def set_spectofit(self, fit_original=True, fit_residuals=False):
         """
@@ -197,7 +201,8 @@ class Baseline(interactive.Interactive):
             self.spectofit = self.Spectrum.data.copy()
 
     def fit(self, powerlaw=None, order=None, includemask=None, spline=False,
-            spline_sampling=10, spline_downsampler=np.median, **kwargs):
+            spline_sampling=10, spline_downsampler=np.median,
+            xarr_fit_unit='pixels', **kwargs):
         """
         Run the fit and set `self.basespec`
         """
@@ -224,10 +229,11 @@ class Baseline(interactive.Interactive):
                                  err=self.Spectrum.error, order=self.order,
                                  masktoexclude=~self.includemask,
                                  powerlaw=self.powerlaw,
-                                 xarr_fit_units=xarr.unit, **kwargs)
+                                 xarr_fitunits=xarr_fit_unit,
+                                 **kwargs)
             self.basespec, self.baselinepars = (a,b)
 
-            self.set_basespec_frompars()
+            self.set_basespec_frompars(xarr_fit_unit=xarr_fit_unit)
 
     def button2action(self, event=None, debug=False, subtract=True,
                       powerlaw=None, fit_original=False,
@@ -240,7 +246,8 @@ class Baseline(interactive.Interactive):
         Do the baseline fitting and save and plot the results.
 
         """
-        if debug: print "Button 2/3 Baseline.  Subtract=",subtract
+        if debug:
+            print("Button 2/3 Baseline.  Subtract={0}".format(subtract))
         if self.subtracted:
             self.unsubtract()
 
@@ -255,6 +262,7 @@ class Baseline(interactive.Interactive):
 
         self._xfit_units = self.Spectrum.xarr.unit
 
+<<<<<<< HEAD
         self.spline = spline
         # A pre-fit continuum can be a constant, an array of polynomial
         # coefficients, or a tuple of B-Spline coefficients.
@@ -287,6 +295,15 @@ class Baseline(interactive.Interactive):
                      spline_sampling=spline_sampling,
                      spline_downsampler=spline_downsampler)
             self.set_basespec_frompars()
+=======
+        log.debug("Fitting baseline: powerlaw={0} "
+                  "spline={1}".format(self.powerlaw, spline))
+        self.fit(powerlaw=powerlaw, includemask=self.includemask,
+                 order=self.order, spline=spline,
+                 spline_sampling=spline_sampling,
+                 spline_downsampler=spline_downsampler,
+                 **kwargs)
+>>>>>>> 8d5b6f4c4b40cc8968f24d502ad900ffaec75788
 
         if subtract:
             if self.subtracted and fit_original:
@@ -301,7 +318,7 @@ class Baseline(interactive.Interactive):
             self.subtracted = False
 
         if self.Spectrum.plotter.axis is not None:
-            if debug: print "Plotting baseline"
+            log.debug("Plotting baseline")
             if event is not None:
                 # preserve frame if fitting interactively
                 kwargs.update({'use_window_limits':True})
@@ -313,16 +330,33 @@ class Baseline(interactive.Interactive):
 
         if hasattr(self.Spectrum,'header'):
             history.write_history(self.Spectrum.header,
-                    "BASELINE order=%i pars=%s" % (self.order,
-                        ",".join([str(s) for s in self.baselinepars])) +
-                        "(powerlaw)" if self.powerlaw else "")
+                                  "BASELINE order=%i pars=%s"
+                                  % (self.order, ",".join([str(s) for s in
+                                                           self.baselinepars]))
+                                  + "(powerlaw)" if self.powerlaw else "")
 
-    def set_basespec_frompars(self, baselinepars=None):
+    def set_basespec_frompars(self, baselinepars=None, xarr_fit_unit=None):
         """
         Set the baseline spectrum based on the fitted parameters
-        """
 
-        self.basespec = self.get_model(xarr=self.Spectrum.xarr,
+        Parameters
+        ----------
+        baselinepars : list
+            Optional list of fit parameters, e.g. a list of polynomial
+            coefficients
+        xarr_fit_unit : None or 'pixels' or 'native' or unit
+            The units that were used in the baseline fit
+        """
+        if xarr_fit_unit == 'pixels':
+            xarrconv = np.arange(self.Spectrum.data.size)
+        elif xarr_fit_unit not in (None, 'native'):
+            xarrconv = self.Spectrum.xarr.as_unit(xarr_fit_unit)
+        else:
+            xarrconv = self.Spectrum.xarr
+
+        log.debug("xarr_fit_unit: {0}".format(xarr_fit_unit))
+
+        self.basespec = self.get_model(xarr=xarrconv,
                                        baselinepars=baselinepars)
 
     def get_model(self, xarr=None, baselinepars=None):
@@ -416,8 +450,10 @@ class Baseline(interactive.Interactive):
                     alpha=alpha,
                     **plotkwargs)
 
-        if annotate: self.annotate() # refreshes automatically
-        elif self.Spectrum.plotter.autorefresh: self.Spectrum.plotter.refresh()
+        if annotate:
+            self.annotate() # refreshes automatically
+        elif self.Spectrum.plotter.autorefresh:
+            self.Spectrum.plotter.refresh()
 
     def unsubtract(self, replot=True, preserve_limits=True):
         """
@@ -433,12 +469,12 @@ class Baseline(interactive.Interactive):
         if self.subtracted:
             self.Spectrum.data += self.basespec
             self.subtracted = False
-            if replot:
+            if replot and self.Spectrum.plotter.axis is not None:
                 kwargs = self.Spectrum.plotter.plotkwargs
                 kwargs.update({'use_window_limits':preserve_limits})
                 self.Spectrum.plotter(**kwargs)
         else:
-            print "Baseline wasn't subtracted; not unsubtracting."
+            print("Baseline wasn't subtracted; not unsubtracting.")
 
     def annotate(self,loc='upper left'):
         if self.powerlaw:
@@ -473,7 +509,7 @@ class Baseline(interactive.Interactive):
 
     def _baseline(self, spectrum, xarr=None, err=None,
                   order=1, quiet=True, masktoexclude=None, powerlaw=False,
-                  xarr_fit_units='pixels', LoudDebug=False, renormalize='auto',
+                  xarr_fit_unit='pixels', LoudDebug=False, renormalize='auto',
                   zeroerr_is_OK=True, spline=False, **kwargs):
         """
         Fit a baseline/continuum to a spectrum
@@ -497,8 +533,13 @@ class Baseline(interactive.Interactive):
         #elif xmax is None:
         #    xmax = spectrum.shape[-1]
 
-        if xarr is None:
-            xarr = np.indices(spectrum.shape).squeeze()
+        if xarr is None or xarr_fit_unit == 'pixels':
+            xarrconv = np.arange(spectrum.size)
+        elif xarr_fit_unit not in (None, 'native'):
+            xarrconv = xarr.as_unit(xarr_fit_unit)
+        else:
+            xarrconv = xarr
+        log.debug("xarrconv = {0}".format(xarrconv))
 
 
         # A good alternate implementation of masking is to only pass mpfit the data
@@ -521,19 +562,19 @@ class Baseline(interactive.Interactive):
             if masktoexclude.dtype.name != 'bool':
                 masktoexclude = masktoexclude.astype('bool')
             err[masktoexclude] = 1e10
-            if LoudDebug: print "In _baseline: %i points masked out" % masktoexclude.sum()
+            if LoudDebug:
+                print("In _baseline: %i points masked out" % masktoexclude.sum())
         if (spectrum!=spectrum).sum() > 0:
-            print "There is an error in baseline: some values are NaN"
+            print("There is an error in baseline: some values are NaN")
             import pdb; pdb.set_trace()
 
-        #xarrconv = xarr[xmin:xmax].as_unit(xarr_fit_units)
-        OK = True-masktoexclude
-        xarrconv = xarr.as_unit(xarr_fit_units)
+        OK = ~masktoexclude
         if powerlaw:
             # for powerlaw fitting, only consider positive data
             OK *= spectrum > 0
             pguess = [np.median(spectrum[OK]),2.0]
-            if LoudDebug: print "_baseline powerlaw Guesses: ",pguess
+            if LoudDebug:
+                print("_baseline powerlaw Guesses: ",pguess)
 
             def mpfitfun(data,err):
                 #def f(p,fjac=None): return [0,np.ravel(((p[0] * (xarrconv[OK]-p[2])**(-p[1]))-data)/err)]
@@ -546,10 +587,12 @@ class Baseline(interactive.Interactive):
                 return f
         else:
             pguess = [0]*(order+1)
-            if LoudDebug: print "_baseline Guesses: ",pguess
+            if LoudDebug:
+                print("_baseline Guesses: ",pguess)
 
             def mpfitfun(data,err):
-                def f(p,fjac=None): return [0,np.ravel((np.poly1d(p)(xarrconv[OK])-data)/err)]
+                def f(p,fjac=None):
+                    return [0,np.ravel((np.poly1d(p)(xarrconv[OK])-data)/err)]
                 return f
         #scalefactor = 1.0
         #if renormalize in ('auto',True):
@@ -560,13 +603,23 @@ class Baseline(interactive.Interactive):
         #        spectrum /= scalefactor
         #        err /= scalefactor
 
-        import pyspeckit.mpfit as mpfit
-        mp = mpfit.mpfit(mpfitfun(spectrum[OK],err[OK]),xall=pguess,quiet=quiet) # mpfit doesn't need to take kwargs, I think ,**kwargs)
+        # error checking:
+        shapeOK = (xarrconv.shape == spectrum.shape and xarrconv.shape ==
+                   err.shape and OK.shape == xarrconv.shape)
+        if not shapeOK:
+            raise ValueError("The shape of the fitted spectra are not"
+                             " identical.  This is a major error, please "
+                             "report it as an Issue: "
+                             "https://github.com/pyspeckit/pyspeckit/issues")
+
+        mp = mpfit.mpfit(mpfitfun(spectrum[OK], err[OK]), xall=pguess,
+                         quiet=quiet)
         if np.isnan(mp.fnorm):
             raise ValueError("chi^2 is NAN in baseline fitting")
+        self.mpfit_status = models.mpfit_messages[mp.status]
+        log.debug("mpfit message: {0}".format(self.mpfit_status))
         fitp = mp.params
         if powerlaw:
-            #bestfit = (fitp[0]*(xarrconv)**(-fitp[1])).squeeze()
             bestfit = (fitp[0]*(xarrconv)**(-fitp[1])).squeeze()
         else:
             bestfit = np.poly1d(fitp)(xarrconv).squeeze()

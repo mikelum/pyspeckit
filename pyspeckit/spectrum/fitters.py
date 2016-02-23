@@ -1,18 +1,21 @@
 from __future__ import print_function
 import matplotlib
 import numpy as np
-from ..config import mycfg
-from ..config import ConfigDescriptor as cfgdec
-import units
-import models
-from pyspeckit.specwarnings import warn
-import interactive
 import copy
-import history
 import re
 import itertools
 from astropy import log
 from astropy import units as u
+from astropy.extern.six.moves import xrange
+
+from ..config import mycfg
+from ..config import ConfigDescriptor as cfgdec
+from . import units
+from . import models
+from ..specwarnings import warn
+from . import interactive
+from . import history
+from . import widgets
 
 class Registry(object):
     """
@@ -54,6 +57,21 @@ You can select different fitters to use with the interactive fitting routine.
 The default is gaussian ('g'), all options are listed below:
         """
         self._make_interactive_help_message()
+
+    def __copy__(self):
+        # http://stackoverflow.com/questions/1500718/what-is-the-right-way-to-override-the-copy-deepcopy-operations-on-an-object-in-p
+        cls = self.__class__
+        result = cls.__new__(cls)
+        result.__dict__.update(self.__dict__)
+        return result
+
+    def __deepcopy__(self, memo):
+        cls = self.__class__
+        result = cls.__new__(cls)
+        memo[id(self)] = result
+        for k, v in self.__dict__.items():
+            setattr(result, k, copy.deepcopy(v, memo))
+        return result
 
     def add_fitter(self, name, function, npars, override=False, key=None,
                    multisingle=None):
@@ -412,21 +430,23 @@ class Specfit(interactive.Interactive):
                 midpt       = self.Spectrum.xarr[midpt_pixel].value
             elif midpt_location == 'fitted':
                 try:
-                    PI_keys = self.Spectrum.specfit.parinfo.keys()
-                    shifts = [self.Spectrum.specfit.parinfo[PI_keys[x]].value for x in range(1, len(PI_keys), 3)]
+                    shifts = [self.Spectrum.specfit.parinfo[x].value
+                              for x in self.Spectrum.specfit.parinfo.keys()
+                              if 'SHIFT' in x]
                 except AttributeError:
                     raise AttributeError("Can only specify midpt_location="
                                          "fitted if there is a SHIFT parameter"
                                          "for the fitted model")
-                # We choose to display the eqw fit at the center of the fitted line set,
-                # closest to the passed window.
-                # Note that this has the potential to show a eqw "rectangle" centered
-                # on a fitted line other than the one measured for the eqw call, if
-                # there are more than one fitted lines within the window.
+                # We choose to display the eqw fit at the center of the fitted
+                # line set, closest to the passed window.
+                # Note that this has the potential to show a eqw "rectangle"
+                # centered on a fitted line other than the one measured for the
+                # eqw call, if there are more than one fitted lines within the
+                # window.
                 midpt_pixel = (xmin+xmax)/2
                 midval = self.Spectrum.xarr[midpt_pixel].value
-                shifts.sort(key=lambda s: abs(s-midval))
-                midpt = shifts[0]
+                midpt_index = np.argmin(np.abs(shifts-midval))
+                midpt = shifts[midpt_index]
                 midpt_pixel = self.Spectrum.xarr.x_to_pix(midpt)
             else:
                 raise ValueError("midpt_location must be 'plot-center' or "
@@ -903,7 +923,9 @@ class Specfit(interactive.Interactive):
                 or add_baseline is False):
             return self.fitter.n_modelfunc(pars,**self.fitter.modelfunc_kwargs)(xarr)
         else:
-            return self.fitter.n_modelfunc(pars,**self.fitter.modelfunc_kwargs)(xarr) + self.Spectrum.baseline.get_model(xarr)
+            return (self.fitter.n_modelfunc(pars,
+                                            **self.fitter.modelfunc_kwargs)(xarr)
+                    + self.Spectrum.baseline.get_model(np.arange(xarr.size)))
 
     def plot_model(self, pars, offset=0.0, annotate=False, clear=False, **kwargs):
         """
@@ -976,7 +998,7 @@ class Specfit(interactive.Interactive):
         """
         #if self.Spectrum.baseline.subtracted is False and self.Spectrum.baseline.basespec is not None:
         #    # don't display baseline if it's included in the fit
-        #    plot_offset = self.Spectrum.plotter.offset+(self.Spectrum.baseline.basespec * (True-self.vheight))
+        #    plot_offset = self.Spectrum.plotter.offset+(self.Spectrum.baseline.basespec * (~self.vheight))
         #else:
         if offset is None:
             plot_offset = self.Spectrum.plotter.offset
@@ -1422,7 +1444,7 @@ class Specfit(interactive.Interactive):
                     if mycfg.WARN: print("WARNING: The computation of the error "
                                          "on the integral is not obviously "
                                          "correct or robust... it's just a guess.")
-                    OK = np.abs( fullmodel ) > threshold
+                    OK = self.model_mask(threshold=threshold, add_baseline=False)
                     error = np.sqrt((self.errspec[OK]**2).sum()) * dx
                     #raise NotImplementedError("We haven't written up correct error estimation for integrals of fits")
             else:
@@ -1625,7 +1647,6 @@ class Specfit(interactive.Interactive):
         .. todo:: Add a button in the navbar that makes this window pop up
         http://stackoverflow.com/questions/4740988/add-new-navigate-modes-in-matplotlib
         """
-        import widgets
 
         if parlimitdict is None:
             # try to create a reasonable parlimit dict
@@ -1809,7 +1830,7 @@ class Specfit(interactive.Interactive):
             of the line.  This threshold is applied to the *model*.  If it is
             'noise', self.error will be used.
         emission : bool
-            Is the line absorption or emission?  
+            Is the line absorption or emission?
         interpolate_factor : integer
             Magnification factor for determining sub-pixel FWHM.  If used,
             "zooms-in" by using linear interpolation within the line region
@@ -1837,6 +1858,9 @@ class Specfit(interactive.Interactive):
             data = self.Spectrum.data * 1
 
         model = self.get_full_model(add_baseline=False)
+        if np.count_nonzero(model) == 0:
+            raise ValueError("The model is all zeros.  No FWHM can be "
+                             "computed.")
 
         # can modify inplace because data is a copy of self.Spectrum.data
         if not emission:
@@ -1846,10 +1870,14 @@ class Specfit(interactive.Interactive):
         line_region = model > threshold
         if line_region.sum() == 0:
             raise ValueError("No valid data included in FWHM computation")
-        if line_region.sum() <= 2:
+        if line_region.sum() <= grow_threshold:
             line_region[line_region.argmax()-1:line_region.argmax()+1] = True
             reverse_argmax = len(line_region) - line_region.argmax() - 1
             line_region[reverse_argmax-1:reverse_argmax+1] = True
+            log.warn("Fewer than {0} pixels were identified as part of the fit."
+                     " To enable statistical measurements, the range has been"
+                     " expanded by 2 pixels including some regions below the"
+                     " threshold.".format(grow_threshold))
 
         # determine peak (because data is neg if absorption, always use max)
         peak = data[line_region].max()
@@ -1859,11 +1887,14 @@ class Specfit(interactive.Interactive):
         cd = xarr.dxarr.min()
         
         if interpolate_factor > 1:
-            newxarr = units.SpectroscopicAxis(
-                    np.arange(xarr.min().value-cd,xarr.max().value+cd,cd / float(interpolate_factor)),
-                    unit=xarr.unit,
-                    equivalencies=xarr.equivalencies
-                    )
+            newxarr = units.SpectroscopicAxis(np.arange(xarr.min().value-cd,
+                                                        xarr.max().value+cd,
+                                                        cd /
+                                                        float(interpolate_factor)
+                                                       ),
+                                              unit=xarr.unit,
+                                              equivalencies=xarr.equivalencies
+                                             )
             # load the metadata from xarr
             # newxarr._update_from(xarr)
             data = np.interp(newxarr,xarr,data[line_region])
@@ -1874,15 +1905,31 @@ class Specfit(interactive.Interactive):
         # need the peak location so we can find left/right half-max locations
         peakloc = data.argmax()
 
-        hm_left  = np.argmin( np.abs( data[:peakloc]-peak/2. ))
-        hm_right = np.argmin( np.abs( data[peakloc:]-peak/2. )) + peakloc
+        hm_left = np.argmin(np.abs(data[:peakloc]-peak/2.))
+        hm_right = np.argmin(np.abs(data[peakloc:]-peak/2.)) + peakloc
         
         deltax = xarr[hm_right]-xarr[hm_left]
 
         if plot:
-            self.Spectrum.plotter.axis.plot([xarr[hm_right],xarr[hm_left]],
-                    np.array([peak/2.,peak/2.])+self.Spectrum.plotter.offset,
-                    **kwargs)
+            # for plotting, use a negative if absorption
+            sign = 1 if emission else -1
+
+            # shift with baseline if baseline is plotted
+            if not self.Spectrum.baseline.subtracted:
+                basespec = self.Spectrum.baseline.get_model(xarr)
+                yoffleft = self.Spectrum.plotter.offset + basespec[hm_left]
+                yoffright = self.Spectrum.plotter.offset + basespec[hm_right]
+            else:
+                yoffleft = yoffright = self.Spectrum.plotter.offset
+
+            log.debug("peak={2} yoffleft={0} yoffright={1}".format(yoffleft, yoffright, peak))
+            log.debug("hm_left={0} hm_right={1} xarr[hm_left]={2} xarr[hm_right]={3}".format(hm_left, hm_right, xarr[hm_left], xarr[hm_right]))
+
+            self.Spectrum.plotter.axis.plot([xarr[hm_right].value,
+                                             xarr[hm_left].value],
+                                            np.array([sign*peak/2.+yoffleft,
+                                                      sign*peak/2.+yoffright]),
+                                            **kwargs)
             self.Spectrum.plotter.refresh()
 
         # debug print hm_left,hm_right,"FWHM: ",deltax

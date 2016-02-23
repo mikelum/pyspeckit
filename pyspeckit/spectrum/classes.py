@@ -14,26 +14,28 @@ different wavelengths/frequencies
 .. moduleauthor:: Adam Ginsburg <adam.g.ginsburg@gmail.com>
 .. moduleauthor:: Jordan Mirocha <mirochaj@gmail.com>
 """
+from __future__ import print_function
 import numpy as np
-import smooth as sm
+from astropy.extern.six import iteritems
 try:
     import astropy.io.fits as pyfits
 except ImportError:
     import pyfits
-import readers
-import plotters
-import writers
-import baseline
-import units
-import measurements
-import speclines
-import interpolation
-import moments as moments_module
-import fitters
-import history
+from . import smooth as sm
+from . import readers
+from . import plotters
+from . import writers
+from . import baseline
+from . import units
+from . import measurements
+from . import speclines
+from . import interpolation
+from . import moments as moments_module
+from . import fitters
+from . import history
 import copy
 from astropy import log
-from pyspeckit.specwarnings import warn
+from ..specwarnings import warn
 try:
     import atpy
     atpyOK = True
@@ -57,7 +59,7 @@ class Spectrum(object):
     formats.
     """
 
-    from interpolation import interpnans
+    from .interpolation import interpnans
 
     def __init__(self, filename=None, filetype=None, xarr=None, data=None,
                  error=None, header=None, doplot=False, maskdata=True,
@@ -120,6 +122,18 @@ class Spectrum(object):
         >>> sp = pyspeckit.Spectrum('test.fits')
         """
         if filename:
+            if error is not None:
+                raise ValueError("When reading from a file, you cannot specify"
+                                 "the error as an array.  Instead, set it "
+                                 "separately after reading the file, e.g.: \n"
+                                 "sp = Spectrum(filename)\n"
+                                 "sp.error[:] = rms")
+            if xarr is not None:
+                raise ValueError("Cannot specify xarr when reading from a "
+                                 "file.  If the xarr in the file is incorrect,"
+                                 "change it after reading the file in, i.e., "
+                                 "set sp.xarr on another line.")
+
             if filetype is None:
                 suffix = filename.rsplit('.',1)[1]
                 if suffix in readers.suffix_types:
@@ -169,6 +183,9 @@ class Spectrum(object):
                 warn( "WARNING: No header given.  Creating an empty one." )
                 self.header = pyfits.Header()
             self.parse_header(self.header)
+        else:
+            raise ValueError("Must either give a filename or xarr and data "
+                             "keywords to instantiate a pyspeckit.Spectrum")
 
         if hasattr(self.data,'unit'):
             # TODO: use the quantity more appropriately
@@ -253,7 +270,7 @@ class Spectrum(object):
         elif not isinstance(registry, fitters.Registry):
             raise TypeError("registry must be an instance of the fitters.Registry class")
 
-        for modelname, model in registry.multifitters.iteritems():
+        for modelname, model in iteritems(registry.multifitters):
             self.Registry.add_fitter(modelname, model,
                     registry.npars[modelname], key=registry.associated_keys.get(modelname))
 
@@ -394,14 +411,25 @@ class Spectrum(object):
         Fixes CRPIX1 and baseline and model spectra to match cropped data spectrum
 
         """
-        if self.xarr.unit and not unit:
-            unit = self.xarr.unit
-        elif not self.xarr.unit and not unit:
-            unit = u.dimensionless_unscaled
 
         # do slice (this code is redundant... need to figure out how to fix that)
-        x1pix = np.argmin(np.abs(x1-self.xarr.as_unit(unit).value))
-        x2pix = np.argmin(np.abs(x2-self.xarr.as_unit(unit).value))
+        if not hasattr(x1, 'unit') and unit is not None:
+            x1pix = np.argmin(np.abs(x1-self.xarr.as_unit(unit).value))
+            x2pix = np.argmin(np.abs(x2-self.xarr.as_unit(unit).value))
+        elif hasattr(x1, 'unit') and unit is not None:
+            raise ValueError("If you give x1,x2 as quantities, don't specify "
+                             "the X-axis unit (it must be equivalent, though).")
+        elif not hasattr(x1, 'unit') and unit is None:
+            x1pix = x1
+            x2pix = x2
+        else:
+            # Hack: something about the inheritance of xarr prevents equivalent
+            # unit arithmetic
+            x1pix = np.argmin(np.abs(x1-u.Quantity(self.xarr)))
+            x2pix = np.argmin(np.abs(x2-u.Quantity(self.xarr)))
+            x1 = x1.value
+            x2 = x2.value
+
         if x1pix > x2pix:
             x1pix,x2pix = x2pix,x1pix
         elif x1pix == x2pix:
@@ -418,11 +446,15 @@ class Spectrum(object):
             self.specfit._full_model()
 
         if hasattr(self,'header'):
-            history.write_history(self.header,"CROP: Cropped from %g to %g (pixel %i to %i)" % (x1,x2,x1pix,x2pix))
+            history.write_history(self.header,
+                                  "CROP: Cropped from %g to %g (pixel %i to %i)"
+                                  % (x1,x2,x1pix,x2pix))
 
             if self.header.get('CRPIX1'):
                 self.header['CRPIX1'] = self.header.get('CRPIX1') - x1pix
-                history.write_history(self.header,"CROP: Changed CRPIX1 from %f to %f" % (self.header.get('CRPIX1')+x1pix,self.header.get('CRPIX1')))
+                history.write_history(self.header,
+                                      "CROP: Changed CRPIX1 from %f to %f"
+                                      % (self.header.get('CRPIX1')+x1pix,self.header.get('CRPIX1')))
 
     def slice(self, start=None, stop=None, unit='pixel', copy=True, xcopy=True,
               preserve_fits=False):
@@ -782,7 +814,9 @@ class Spectra(Spectrum):
     """
 
     def __init__(self, speclist, xunit='GHz', **kwargs):
-        print "Creating spectra"
+        """
+        """
+        print("Creating spectra")
         speclist = list(speclist)
         for ii,spec in enumerate(speclist):
             if type(spec) is str:
@@ -791,7 +825,7 @@ class Spectra(Spectrum):
 
         self.speclist = speclist
 
-        print "Concatenating data"
+        print("Concatenating data")
         self.xarr = units.SpectroscopicAxes([sp.xarr.as_unit(xunit) for sp in speclist])
         self.xarr.set_unit(u.Unit(xunit))
         self.xarr.xtype = u.Unit(xunit)
@@ -1001,11 +1035,11 @@ class ObsBlock(Spectra):
             # wtarr.sum(axis=1) randomly - say, one out of every 10-100 occurrences - fills with 
             # nonsense values (1e-20, 1e-55, whatever).  There is no pattern to this; it occurs in
             # while loops, but ONLY IN THIS FUNCTION.  This is unreproduceable anywhere else.
-            print "selfdata    min: %10g max: %10g" % (self.data.min(), self.data.max())
-            print "nonandata   min: %10g max: %10g" % (data_nonan.min(), data_nonan.max())
-            print "avgdata     min: %10g max: %10g" % (avgdata.min(), avgdata.max())
-            print "weight      sum: %10g" % (wtarr.sum())
-            print "data*weight sum: %10g" % ((data_nonan*wtarr).sum())
+            print("selfdata    min: %10g max: %10g" % (self.data.min(), self.data.max()))
+            print("nonandata   min: %10g max: %10g" % (data_nonan.min(), data_nonan.max()))
+            print("avgdata     min: %10g max: %10g" % (avgdata.min(), avgdata.max()))
+            print("weight      sum: %10g" % (wtarr.sum()))
+            print("data*weight sum: %10g" % ((data_nonan*wtarr).sum()))
             if np.abs(data_nonan.min()/avgdata.min()) > 1e10:
                 import pdb; pdb.set_trace()
 

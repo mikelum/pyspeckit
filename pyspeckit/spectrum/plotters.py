@@ -11,10 +11,16 @@ import matplotlib.pyplot
 import matplotlib.figure
 import numpy as np
 import astropy.units as u
-from pyspeckit.specwarnings import warn
 import copy
-import widgets
 import inspect
+
+try:
+    from matplotlib.cbook import BoundMethodProxy
+except ImportError:
+    from matplotlib.cbook import _BoundMethodProxy as BoundMethodProxy
+
+from . import widgets
+from ..specwarnings import warn
 
 interactive_help_message = """
 Interactive key commands for plotter.  An additional help message may appear if
@@ -117,9 +123,16 @@ class Plotter(object):
         """
         if self.figure is not None:
             cbs = self.figure.canvas.callbacks.callbacks
-            self._mpl_key_callbacks = dict([(k, cbs['key_press_event'].pop(k))
-                                            for k in
-                                            cbs['key_press_event'].keys()[0:1]])
+            # this may cause problems since the dict of key press events is a
+            # dict, i.e. not ordered, and we want to pop the first one...
+            mpl_keypress_handler = self.figure.canvas.manager.key_press_handler_id
+            try:
+                self._mpl_key_callbacks = {mpl_keypress_handler:
+                                           cbs['key_press_event'].pop(mpl_keypress_handler)}
+            except KeyError:
+                bmp = BoundMethodProxy(self.figure.canvas.manager.key_press)
+                self._mpl_key_callbacks = {mpl_keypress_handler:
+                                           bmp}
 
     def _reconnect_matplotlib_keys(self):
         """
@@ -127,6 +140,11 @@ class Plotter(object):
         """
         if self.figure is not None and hasattr(self,'_mpl_key_callbacks'):
             self.figure.canvas.callbacks.callbacks['key_press_event'].update(self._mpl_key_callbacks)
+        elif self.figure is not None:
+            mpl_keypress_handler = self.figure.canvas.manager.key_press_handler_id
+            bmp = BoundMethodProxy(self.figure.canvas.manager.key_press)
+            self.figure.canvas.callbacks.callbacks['key_press_event'].update({mpl_keypress_handler:
+                                                                              bmp})
 
     def __call__(self, figure=None, axis=None, clear=True, autorefresh=None,
                  plotscale=1.0, override_plotkwargs=False, **kwargs):
@@ -169,6 +187,11 @@ class Plotter(object):
         elif len(self.figure.axes) > 0 and self.axis is None:
             self.axis = self.figure.axes[0] # default to first axis
         elif self.axis is None:
+            self.axis = self.figure.gca()
+
+        # A check to deal with issue #117: if you close the figure, the axis
+        # still exists, but it cannot be reattached to a figure
+        if not (self.axis.get_figure() is matplotlib.pyplot.figure(self.axis.get_figure().number)):
             self.axis = self.figure.gca()
 
         if self.axis is not None and self.axis not in self.figure.axes:
@@ -256,13 +279,16 @@ class Plotter(object):
 
         self.offset = offset
 
+        # there is a bug where this only seems to update the second time it is called
+        self.label(**kwargs)
         self.label(**kwargs)
         for arg in ['title','xlabel','ylabel']:
             if arg in kwargs:
                 kwargs.pop(arg)
 
         reset_kwargs = {}
-        for arg in ['xmin','xmax','ymin','ymax','reset_xlimits','reset_ylimits','ypeakscale']:
+        for arg in ['xmin', 'xmax', 'ymin', 'ymax', 'reset_xlimits',
+                    'reset_ylimits', 'ypeakscale']:
             if arg in kwargs:
                 reset_kwargs[arg] = kwargs.pop(arg)
 
@@ -567,6 +593,7 @@ class Plotter(object):
         return newplotter
 
     def line_ids(self, line_names, line_xvals, xval_units=None, auto_yloc=True,
+                 velocity_offset=None, velocity_convention='radio',
                  auto_yloc_fraction=0.9,  **kwargs):
         """
         Add line ID labels to a plot using lineid_plot
@@ -579,9 +606,15 @@ class Plotter(object):
         line_names : list
             A list of strings to label the specified x-axis values
         line_xvals : list
-            List of x-axis values (e.g., wavelengths) at which to label the lines
+            List of x-axis values (e.g., wavelengths) at which to label the lines.
+            Can be a list of quantities.
         xval_units : string
-            A valid unit to convert to.  If None, leaves units unchanged
+            The unit of the line_xvals if they are not given as quantities
+        velocity_offset : quantity
+            A velocity offset to apply to the inputs if they are in frequency
+            or wavelength units
+        velocity_convention : 'radio' or 'optical' or 'doppler'
+            Used if the velocity offset is given
         auto_yloc : bool
             If set, overrides box_loc and arrow_tip (the vertical position of
             the lineid labels) in kwargs to be `auto_yloc_fraction` of the plot
@@ -602,13 +635,26 @@ class Plotter(object):
         """
         import lineid_plot
 
-        # convert line_xvals to current units
-        xvals = [self.Spectrum.xarr.x_to_coord(c, xval_units) for c in line_xvals]
+        if velocity_offset is not None:
+            assert velocity_offset.unit.is_equivalent(u.km/u.s)
 
-        # xvals must not be quantities because matplotlib cannot handle these
-        def strip_qty(x):
-            return x.value if hasattr(x,'value') else x
-        xvals = map(strip_qty, xvals)
+        doppler = getattr(u, 'doppler_{0}'.format(velocity_convention))
+        equivalency = doppler(self.Spectrum.xarr.refX)
+
+        xvals = []
+        for xv in line_xvals:
+            if hasattr(xv, 'unit'):
+                pass
+            else:
+                xv = u.Quantity(xv, xval_units)
+
+            xv = xv.to(u.km/u.s,
+                       equivalencies=equivalency)
+            if velocity_offset is not None:
+                xv = xv + velocity_offset
+            xv = xv.to(self.Spectrum.xarr.unit, equivalencies=equivalency)
+
+            xvals.append(xv.value)
 
         if auto_yloc:
             yr = self.axis.get_ylim()
@@ -706,8 +752,8 @@ def steppify(arr,isX=False):
     """
     if isX:
         interval = abs(arr[1:]-arr[:-1]) / 2.0
-        newarr = np.array(zip(arr[:-1]-interval,arr[:-1]+interval)).ravel()
+        newarr = np.array(list(zip(arr[:-1]-interval,arr[:-1]+interval))).ravel()
         newarr = np.concatenate([newarr,2*[newarr[-1]+interval[-1]]])
     else:
-        newarr = np.array(zip(arr,arr)).ravel()
+        newarr = np.array(list(zip(arr,arr))).ravel()
     return newarr

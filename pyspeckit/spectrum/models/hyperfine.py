@@ -5,12 +5,16 @@ Generalized hyperfine component fitter
 .. moduleauthor:: Adam Ginsburg <adam.g.ginsburg@gmail.com>
 """
 import numpy as np
-import model
-import fitter
 from astropy import units as u
+from astropy import constants
+import copy
+
+from . import model
+from . import fitter
 
 # should be imported in the future
 ckms = 2.99792458e5
+hoverk = (constants.h.cgs/constants.k_B.cgs).value
 
 class hyperfinemodel(object):
     """
@@ -40,7 +44,7 @@ class hyperfinemodel(object):
             Relative strengths of the hyperfine components, usually determined
             by their degeneracy and Einstein A coefficients
         """
-        self.line_names = line_names
+        self.line_names = tuple(line_names)
         self.voff_lines_dict = voff_lines_dict
         self.freq_dict = freq_dict
         self.line_strength_dict = line_strength_dict
@@ -125,6 +129,23 @@ class hyperfinemodel(object):
             shortvarnames=(r'\tau',"v","\\sigma"), # specify the parameter names (TeX is OK)
             fitunits='Hz')
 
+    def __copy__(self):
+        # http://stackoverflow.com/questions/1500718/what-is-the-right-way-to-override-the-copy-deepcopy-operations-on-an-object-in-p
+        cls = self.__class__
+        result = cls.__new__(cls)
+        result.__dict__.update(self.__dict__)
+        return result
+
+    def __deepcopy__(self, memo):
+        # A deep copy of the hyperfine model is OK to just do regular copies of
+        # all attributes, since none of them are meant to be modified
+        cls = self.__class__
+        result = cls.__new__(cls)
+        memo[id(self)] = result
+        for k, v in self.__dict__.items():
+            setattr(result, k, copy.deepcopy(v, memo))
+        return result
+
     def __call__(self, *args, **kwargs):
         """
         Generate a model spectrum given an excitation temperature, optical depth, offset velocity, and velocity width.
@@ -178,9 +199,10 @@ class hyperfinemodel(object):
         if len(args) % 2 != 0:
             raise ValueError("Incorrect number of arguments for varying amplitude"
                              " and width.  Need N amplitudes, N widths.")
+        nargs = int(len(args)/2)
         return self.hyperfine(xarr, xoff_v=xoff_v,
-                              tau=dict(zip(self.line_names,args[:len(args)/2])),
-                              width=dict(zip(self.line_names,args[len(args)/2:])),
+                              tau=dict(zip(self.line_names,args[:nargs])),
+                              width=dict(zip(self.line_names,args[nargs:])),
                               vary_hyperfine_tau=True,
                               vary_hyperfine_width=True,
                               return_tau=True, **kwargs)
@@ -200,8 +222,8 @@ class hyperfinemodel(object):
                 + Tbackground)
 
     def hyperfine_background(self, xarr, Tbackground=2.73, Tex=5.0, tau=0.1,
-                                xoff_v=0.0, width=1.0, return_tau=False,
-                                **kwargs):
+                             xoff_v=0.0, width=1.0, return_tau=False,
+                             **kwargs):
         """
         Identical to hyperfine, but with Tbackground free.  Assumes already
         background-subtracted
@@ -319,7 +341,11 @@ class hyperfinemodel(object):
             # With "background" function B_nu = CMB, S_nu = absorber, and I_nu = received:
             # I_nu = B_nu * exp(-tau) + (1-exp(-tau)) * S_nu
             # This is a very good approximation for Rohlfs & Wilson eqn 15.29:
-            spec = (1.0-np.exp(-np.array(tau_nu_cumul)))*(Tex-Tbackground)
+            #spec = (1.0-np.exp(-np.array(tau_nu_cumul)))*(Tex-Tbackground)
+
+            # this is the exact version of 15.29
+            T0 = hoverk * xarr
+            spec = (1.0-np.exp(-np.array(tau_nu_cumul)))*T0*(1/(np.exp(T0/Tex)-1) - 1/(np.exp(T0/Tbackground)-1))
             
             # This is the equation of radiative transfer using the RJ definitions
             # (eqn 1.37 in Rohlfs)
@@ -330,6 +356,3 @@ class hyperfinemodel(object):
                 return spec
             else:
                 return spec/spec.max() * amp
-
-
-
