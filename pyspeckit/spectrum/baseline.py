@@ -8,6 +8,8 @@ import history
 from .. import specwarnings
 from astropy import log
 
+import scipy.interpolate as interp
+
 interactive_help_message = """
 (1) Left-click or press 1 (one) at two positions to select or add to the baseline fitting range - it will be
 highlighted in green if the selection is successful.
@@ -74,7 +76,7 @@ class Baseline(interactive.Interactive):
                  baseline_fit_color='orange', clear_all_connections=True,
                  fit_plotted_area=True, highlight_fitregion=False,
                  reset_selection=False, subtract=True, selectregion=True,
-                 **kwargs):
+                 prefit_continuum=None, **kwargs):
         """
         Fit and remove a polynomial from the spectrum.
         It will be saved in the variable "self.basespec"
@@ -113,6 +115,13 @@ class Baseline(interactive.Interactive):
         select_region: bool
             Run the region selection procedure?  If false, will leave
             'includemask' untouched
+        prefit_continuum : float, array of floats, or tuple
+            Float: Set the continuum to the passed constant.
+            Array: Sets the baseline to the passed polynomial. 
+            Tuple: Use the tuple as parameters for a (scipy) B-spline
+                   baseline solution
+            Used for spectra which have already been flux-normalized 
+            and had a continuum level determined.
 
         baseline_fit_color: color name (string)
             [plot parameter]
@@ -173,6 +182,7 @@ class Baseline(interactive.Interactive):
                                debug=debug,
                                subtract=subtract,
                                LoudDebug=LoudDebug,
+                               prefit_continuum=prefit_continuum,
                                **kwargs)
             if highlight_fitregion: self.highlight_fitregion()
         if save: self.savefit()
@@ -226,7 +236,8 @@ class Baseline(interactive.Interactive):
                       spline=False,
                       spline_sampling=None,
                       spline_downsampler=np.median,
-                      baseline_fit_color='orange', **kwargs):
+                      baseline_fit_color='orange', prefit_continuum=None,
+                      **kwargs):
         """
         Do the baseline fitting and save and plot the results.
 
@@ -246,12 +257,38 @@ class Baseline(interactive.Interactive):
 
         self._xfit_units = self.Spectrum.xarr.unit
 
-        log.debug("Fitting baseline: powerlaw={0} "
-                  "spline={1}".format(self.powerlaw, spline))
-        self.fit(powerlaw=powerlaw, includemask=self.includemask,
-                 order=self.order, spline=spline,
-                 spline_sampling=spline_sampling,
-                 spline_downsampler=spline_downsampler)
+        self.spline = spline
+        # A pre-fit continuum can be a constant, an array of polynomial
+        # coefficients, or a tuple of B-Spline coefficients.
+        if prefit_continuum is not None:
+            del self.baselinepars
+            try:
+                self.baselinepars = np.array(prefit_continuum)
+                self.set_basespec_frompars()
+            except TypeError:
+                # Note: (HUGE assumption, here)
+                # If a spline was passed, it won't cast to an np.array
+                # The non-lazy programmer's solution to this would be to
+                # actually check if our prefit continuum was a spline...
+                self.spline = True
+                self.basespec = prefit_continuum(self.Spectrum.xarr)
+                # baselinepars is an array of polynomial coefficients
+                # for the baseline fit. We don't have this for a spline,
+                # so, we'll "fake" a polynomial fit, just so we can see 
+                # the fit in the plot. Note that the actual fit (and 
+                # EQW measures) is taken from the basespec field, so
+                # the displayed fit may actually differ from the real one.
+                polyFit = np.polyfit(self.Spectrum.xarr, self.basespec, deg=4)
+                self.baselinepars = np.poly1d(polyFit)
+        else:
+
+        	log.debug("Fitting baseline: powerlaw={0} "
+                      "spline={1}".format(self.powerlaw, spline))
+            self.fit(powerlaw=powerlaw, includemask=self.includemask,
+                     order=self.order, spline=spline,
+                     spline_sampling=spline_sampling,
+                     spline_downsampler=spline_downsampler)
+            self.set_basespec_frompars()
 
         if subtract:
             if self.subtracted and fit_original:
@@ -291,6 +328,11 @@ class Baseline(interactive.Interactive):
                                        baselinepars=baselinepars)
 
     def get_model(self, xarr=None, baselinepars=None):
+        if self.spline:
+        # If our baseline (fit) is a spline, it's already stored in
+        # basespec. We don't want to re-create it from the pars,
+        # The pars were created from the spline, using a polynomial fit.
+            return self.basespec        
         # create the full baseline spectrum...
         fit_units = self._xfit_units
         if xarr is None:

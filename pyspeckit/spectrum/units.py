@@ -173,6 +173,8 @@ xtype_dict = {
         'WAVE':'wavelength',
         'wavelength':'wavelength',
         'lambda':'wavelength',
+        'angstrom':'wavelength',
+        'angstroms':'wavelength',
         # cm^-1 ? 'wavenumber':'wavenumber',
         }
 
@@ -200,6 +202,8 @@ frame_dict = SmartCaseNoSpaceDict({
         'WAVE':'rest',
         'wavelength':'rest',
         'lambda':'rest',
+        'angstrom':'rest',
+        'angstroms':'rest',
         'redshift':'obs'
         })
 
