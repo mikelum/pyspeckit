@@ -262,7 +262,6 @@ class Baseline(interactive.Interactive):
 
         self._xfit_units = self.Spectrum.xarr.unit
 
-<<<<<<< HEAD
         self.spline = spline
         # A pre-fit continuum can be a constant, an array of polynomial
         # coefficients, or a tuple of B-Spline coefficients.
@@ -287,23 +286,13 @@ class Baseline(interactive.Interactive):
                 polyFit = np.polyfit(self.Spectrum.xarr, self.basespec, deg=4)
                 self.baselinepars = np.poly1d(polyFit)
         else:
-
-        	log.debug("Fitting baseline: powerlaw={0} "
+            log.debug("Fitting baseline: powerlaw={0} "
                       "spline={1}".format(self.powerlaw, spline))
             self.fit(powerlaw=powerlaw, includemask=self.includemask,
                      order=self.order, spline=spline,
                      spline_sampling=spline_sampling,
-                     spline_downsampler=spline_downsampler)
+                     spline_downsampler=spline_downsampler, **kwargs)
             self.set_basespec_frompars()
-=======
-        log.debug("Fitting baseline: powerlaw={0} "
-                  "spline={1}".format(self.powerlaw, spline))
-        self.fit(powerlaw=powerlaw, includemask=self.includemask,
-                 order=self.order, spline=spline,
-                 spline_sampling=spline_sampling,
-                 spline_downsampler=spline_downsampler,
-                 **kwargs)
->>>>>>> 8d5b6f4c4b40cc8968f24d502ad900ffaec75788
 
         if subtract:
             if self.subtracted and fit_original:

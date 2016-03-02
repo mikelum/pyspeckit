@@ -445,7 +445,8 @@ class Specfit(interactive.Interactive):
                 # window.
                 midpt_pixel = (xmin+xmax)/2
                 midval = self.Spectrum.xarr[midpt_pixel].value
-                midpt_index = np.argmin(np.abs(shifts-midval))
+                # *** LUM
+                midpt_index = np.argmin([np.abs(x-midval) for x in shifts])
                 midpt = shifts[midpt_index]
                 midpt_pixel = self.Spectrum.xarr.x_to_pix(midpt)
             else:
@@ -1014,17 +1015,17 @@ class Specfit(interactive.Interactive):
             self._full_model()
             model = self.fullmodel
 
-        self.modelplot += self.Spectrum.plotter.axis.plot(
-                xarr,
-                model + plot_offset,
-                color=composite_fit_color, linewidth=lw,
-                **plotkwargs)
+        self.modelplot += self.Spectrum.plotter.axis.plot(xarr,
+                                                          model + plot_offset,
+                                                          color=composite_fit_color, 
+                                                          linewidth=lw,
+                                                          **plotkwargs)
         
         # Plot components
         if show_components or show_hyperfine_components:
             self.plot_components(xarr=xarr,
-                    show_hyperfine_components=show_hyperfine_components,
-                    pars=pars, plotkwargs=plotkwargs)
+                                 show_hyperfine_components=show_hyperfine_components,
+                                 pars=pars, plotkwargs=plotkwargs)
 
         uwl = use_window_limits if use_window_limits is not None else self.use_window_limits
         # plotter kwargs are kwargs for the Spectrum.plotter,
@@ -1273,10 +1274,16 @@ class Specfit(interactive.Interactive):
         if self.Spectrum.plotter.axis is not None:
             for p in self.modelplot:
                 p.set_visible(False)
-            if legend: self._clearlegend()
-            if components: self._clearcomponents()
-            if self.Spectrum.plotter.autorefresh: self.Spectrum.plotter.refresh()
-    
+            if legend: 
+                self._clearlegend()
+            if components: 
+                self._clearcomponents()
+            if self.Spectrum.plotter.autorefresh: 
+                self.Spectrum.plotter.refresh()
+
+        # Empty the modelplot array to free memory
+        self.modelplot = []
+      		       
         # remove residuals from self if they're there.
         if hasattr(self,'residualplot'):
             for L in self.residualplot:
@@ -1288,8 +1295,12 @@ class Specfit(interactive.Interactive):
             pc.set_visible(False)
             if pc in self.Spectrum.plotter.axis.lines:
                 self.Spectrum.plotter.axis.lines.remove(pc)
-        if self.Spectrum.plotter.autorefresh: self.Spectrum.plotter.refresh()
+        if self.Spectrum.plotter.autorefresh: 
+            self.Spectrum.plotter.refresh()
 
+        # Empty the plotted components array to free memory
+        self._plotted_components = []
+  		  
     def _clearlegend(self):
         """
         Remove the legend from the plot window
